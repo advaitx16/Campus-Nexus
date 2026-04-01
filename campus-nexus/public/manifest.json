@@ -1,0 +1,41 @@
+{
+  "name": "Campus Nexus",
+  "short_name": "CampusNexus",
+  "description": "Zero-Trust University Economy — Buy, Sell, Rent, Connect",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "shopping", "social"],
+  "shortcuts": [
+    {
+      "name": "Marketplace",
+      "short_name": "Market",
+      "description": "Browse campus listings",
+      "url": "/dashboard",
+      "icons": [{ "src": "/icon-96.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Campus Pulse",
+      "short_name": "Pulse",
+      "description": "Real-time campus chat",
+      "url": "/dashboard/community",
+      "icons": [{ "src": "/icon-96.png", "sizes": "96x96" }]
+    }
+  ]
+}
