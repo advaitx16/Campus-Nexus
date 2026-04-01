@@ -10,12 +10,12 @@ import {
   getOtherParticipantId,
   getOtherParticipantProfile,
   getProfileDisplayName,
+  normalizeChatThreadRow,
   sortMessagesChronologically,
   upsertMessage,
   type ChatListing,
   type ChatMessageRow,
   type ChatProfile,
-  type ChatThreadRow,
 } from '@/lib/chat'
 import {
   Send,
@@ -111,7 +111,7 @@ export default function DirectMessagePage() {
       return
     }
 
-    let resolvedChat: ChatThreadRow | null = null
+    let resolvedChat = null
 
     if (chatIdFromUrl) {
       const { data: chatRow, error: chatError } = await supabase
@@ -126,7 +126,7 @@ export default function DirectMessagePage() {
         return
       }
 
-      resolvedChat = chatRow as ChatThreadRow
+      resolvedChat = normalizeChatThreadRow(chatRow)
     }
 
     if (!resolvedChat && listingIdFromUrl) {
@@ -165,7 +165,7 @@ export default function DirectMessagePage() {
         return
       }
 
-      resolvedChat = ((chatRows ?? [])[0] as ChatThreadRow | undefined) ?? null
+      resolvedChat = normalizeChatThreadRow(chatRows?.[0])
 
       if (!resolvedChat) {
         if (user.id === listingRecord.seller_id) {
@@ -190,7 +190,7 @@ export default function DirectMessagePage() {
           return
         }
 
-        resolvedChat = insertedChat as ChatThreadRow
+        resolvedChat = normalizeChatThreadRow(insertedChat)
       }
     }
 
@@ -212,7 +212,7 @@ export default function DirectMessagePage() {
         return
       }
 
-      resolvedChat = ((directChatRows ?? [])[0] as ChatThreadRow | undefined) ?? null
+      resolvedChat = normalizeChatThreadRow(directChatRows?.[0])
 
       if (!resolvedChat && !listingIdFromUrl) {
         const { data: insertedChat, error: insertError } = await supabase
@@ -230,7 +230,7 @@ export default function DirectMessagePage() {
           return
         }
 
-        resolvedChat = insertedChat as ChatThreadRow
+        resolvedChat = normalizeChatThreadRow(insertedChat)
       }
     }
 

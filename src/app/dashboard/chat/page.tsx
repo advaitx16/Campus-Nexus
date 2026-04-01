@@ -9,9 +9,9 @@ import {
   getOtherParticipantId,
   getOtherParticipantProfile,
   getProfileDisplayName,
+  normalizeChatThreadRow,
   type ChatProfile,
   type ChatMessageRow,
-  type ChatThreadRow,
 } from '@/lib/chat'
 import { MessageSquare, ShieldCheck, Loader2, ArrowRight, AlertCircle } from 'lucide-react'
 
@@ -75,7 +75,7 @@ export default function MessagesInboxPage() {
       return
     }
 
-    const chats = (chatRows ?? []) as ChatThreadRow[]
+    const chats = (chatRows ?? []).map((chatRow) => normalizeChatThreadRow(chatRow)).filter((chat) => chat !== null)
     const chatIds = chats.map((chat) => chat.id)
     let lastMessageByChatId = new Map<string, ChatMessageRow>()
 

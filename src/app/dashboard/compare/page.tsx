@@ -1,4 +1,5 @@
 'use client';
+import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -13,7 +14,7 @@ const ALL_LISTINGS: Record<string, any> = {
   '4': { id:'4', title:'Arduino Starter Kit', price:1200, condition:'Like New', category:'Electronics', image:'⚙️', rating:4.7, reviews:9, seller:'Maker Space', trust:88.4, tags:['electronics','robotics'], specs:{ Components:'200+', 'Compatible IDE':'Arduino IDE', Microcontroller:'ATmega328P', 'Voltage':'5V', Connectivity:'USB', 'Projects Included':'15' } },
 };
 
-export default function ComparePage() {
+function ComparePageContent() {
   const searchParams = useSearchParams();
   const ids = (searchParams.get('ids') || '1,3').split(',').slice(0, 2);
   const items = ids.map(id => ALL_LISTINGS[id] || ALL_LISTINGS['1']);
@@ -92,5 +93,13 @@ export default function ComparePage() {
         ))}
       </div>
     </div>
+  );
+}
+
+export default function ComparePage() {
+  return (
+    <Suspense fallback={<div className="p-4 md:p-8 max-w-5xl mx-auto text-sm text-zinc-500">Loading comparison...</div>}>
+      <ComparePageContent />
+    </Suspense>
   );
 }

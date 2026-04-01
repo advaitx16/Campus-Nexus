@@ -217,11 +217,15 @@ export default function ProductDetailPage() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
 
-      const fetchListingRecord = async (selectClause: string) => supabase
-        .from('listings')
-        .select(selectClause)
-        .eq('id', id)
-        .single();
+      const fetchListingRecord = async (selectClause: string): Promise<{ data: any; error: any }> => {
+        const result = await supabase
+          .from('listings')
+          .select(selectClause)
+          .eq('id', id)
+          .single();
+
+        return { data: result.data, error: result.error };
+      };
 
       let { data, error } = await fetchListingRecord('*, profiles!listings_seller_id_fkey(*)');
       let profile = data?.profiles ?? null;

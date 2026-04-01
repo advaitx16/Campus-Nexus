@@ -25,6 +25,14 @@ export type ChatThreadRow = {
   seller_profile?: ChatProfile | null
 }
 
+type MaybeJoinedRow<T> = T | T[] | null | undefined
+
+export type RawChatThreadRow = Omit<ChatThreadRow, 'listing' | 'buyer_profile' | 'seller_profile'> & {
+  listing?: MaybeJoinedRow<ChatListing>
+  buyer_profile?: MaybeJoinedRow<ChatProfile>
+  seller_profile?: MaybeJoinedRow<ChatProfile>
+}
+
 export type ChatMessageRow = {
   id: string
   chat_id: string
@@ -87,4 +95,25 @@ export function upsertMessage(messages: ChatMessageRow[], incomingMessage: ChatM
     ...messages.filter((message) => message.id !== incomingMessage.id),
     incomingMessage,
   ])
+}
+
+function takeJoinedRow<T>(value: MaybeJoinedRow<T>) {
+  if (Array.isArray(value)) {
+    return value[0] ?? null
+  }
+
+  return value ?? null
+}
+
+export function normalizeChatThreadRow(row?: RawChatThreadRow | null): ChatThreadRow | null {
+  if (!row) {
+    return null
+  }
+
+  return {
+    ...row,
+    listing: takeJoinedRow(row.listing),
+    buyer_profile: takeJoinedRow(row.buyer_profile),
+    seller_profile: takeJoinedRow(row.seller_profile),
+  }
 }

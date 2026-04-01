@@ -87,10 +87,11 @@ export default function ProfilePage() {
     const { data, error } = await supabase
       .rpc('boost_listing_with_cc', { p_user: profile.id, p_listing: listingId, p_cost: cost })
       .single();
+    const boostResult = data as { success?: boolean; remaining_cc?: number } | null;
 
-    if (!error && data?.success) {
+    if (!error && boostResult?.success) {
       setBoostingId(null);
-      setProfile((prev: any) => prev ? { ...prev, cc_points: data.remaining_cc } : prev);
+      setProfile((prev: any) => prev ? { ...prev, cc_points: boostResult.remaining_cc } : prev);
       setMyListings((prev) => prev.map((l) => l.id === listingId ? { ...l, is_featured: true, is_bumped: true } : l));
       alert('🚀 Ad Boosted! Your listing will now appear at the top of the marketplace.');
       return;
