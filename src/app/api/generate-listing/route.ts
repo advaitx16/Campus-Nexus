@@ -1,7 +1,7 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { createGeminiClient, generateContentWithFallback, getVisionModelCandidates } from '@/lib/gemini';
 
 export async function POST(req: Request) {
   try {
@@ -28,8 +28,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No image provided for product analysis' }, { status: 400 });
     }
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const genAI = createGeminiClient();
 
     const arrayBuffer = await image.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
@@ -53,7 +52,7 @@ export async function POST(req: Request) {
       },
     ];
 
-    const result = await model.generateContent([prompt, ...imageParts]);
+    const result = await generateContentWithFallback(genAI, [prompt, ...imageParts], getVisionModelCandidates());
     const responseText = result.response.text();
 
     console.log("Raw Product AI Response:", responseText);

@@ -44,6 +44,7 @@ type Poll = {
   options: string[];
   votes: Record<number, number>;
   total: number;
+  created_at?: string;
 };
 
 const CHANNELS: ChannelConfig[] = [
@@ -62,16 +63,6 @@ const QUICK_REPLIES = [
   "What's the final price?",
   'Can you share more photos?',
   'Is this negotiable?',
-];
-
-const INITIAL_POLLS: Poll[] = [
-  {
-    id: 'p1',
-    question: 'Which canteen is better today?',
-    options: ['Main Cafeteria', 'Snack Corner'],
-    votes: { 0: 34, 1: 58 },
-    total: 92,
-  },
 ];
 
 function formatTime(value: string) {
@@ -130,7 +121,8 @@ export default function CampusPulsePage() {
   const [showPollCreate, setShowPollCreate] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
-  const [polls, setPolls] = useState<Poll[]>(INITIAL_POLLS);
+  const [polls, setPolls] = useState<Poll[]>([]);
+  const pollsLoadedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -149,7 +141,7 @@ export default function CampusPulsePage() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
       setCurrentUserId(session?.user?.id ?? null);
     });
 
@@ -176,11 +168,60 @@ export default function CampusPulsePage() {
         return;
       }
 
-      setMessages((data ?? []).map((row) => toCommunityMessage(row, currentUserId)));
+      setMessages((data ?? []).map((row: any) => toCommunityMessage(row, currentUserId)));
     };
 
     loadMessages();
   }, [activeChannel, currentUserId, supabase]);
+
+  useEffect(() => {
+    const loadPolls = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('pulse_polls')
+          .select('id, question, options, votes, total, created_at')
+          .order('created_at', { ascending: true });
+        if (error) throw error;
+        setPolls(
+          (data ?? []).map((p: any) => ({
+            id: p.id,
+            question: p.question,
+            options: p.options || [],
+            votes: p.votes || {},
+            total: p.total || 0,
+            created_at: p.created_at,
+          })),
+        );
+        pollsLoadedRef.current = true;
+      } catch (err) {
+        console.error('Poll load error:', err);
+        pollsLoadedRef.current = true;
+      }
+    };
+    loadPolls();
+
+    const ch = supabase
+      .channel('pulse_polls_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pulse_polls' }, (payload: any) => {
+        const row = payload.new as any;
+        if (!row) return;
+        setPolls((prev) =>
+          [...prev.filter((p) => p.id !== row.id), {
+            id: row.id,
+            question: row.question,
+            options: row.options || [],
+            votes: row.votes || {},
+            total: row.total || 0,
+            created_at: row.created_at,
+          }].sort((a, b) => new Date(a.created_at ?? 0).getTime() - new Date(b.created_at ?? 0).getTime())
+        );
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [supabase]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -197,7 +238,7 @@ export default function CampusPulsePage() {
           table: 'community_feed',
           filter: `channel=eq.${activeChannel}`,
         },
-        (payload) => {
+        (payload: any) => {
           const nextMessage = toCommunityMessage(payload.new as CommunityFeedRow, currentUserId);
 
           setMessages((previousMessages) =>
@@ -299,42 +340,45 @@ export default function CampusPulsePage() {
     }
   };
 
-  const handleVote = (pollId: string, optionIndex: number) => {
-    setPolls((previousPolls) =>
-      previousPolls.map((poll) => {
-        if (poll.id !== pollId) {
-          return poll;
-        }
-
-        const votes = {
-          ...poll.votes,
-          [optionIndex]: (poll.votes[optionIndex] || 0) + 1,
-        };
-
-        return { ...poll, votes, total: poll.total + 1 };
-      }),
-    );
+  const handleVote = async (pollId: string, optionIndex: number) => {
+    const poll = polls.find((p) => p.id === pollId);
+    if (!poll) return;
+    const nextVotes = { ...poll.votes, [optionIndex]: (poll.votes[optionIndex] || 0) + 1 };
+    const nextTotal = poll.total + 1;
+    setPolls((prev) => prev.map((p) => (p.id === pollId ? { ...p, votes: nextVotes, total: nextTotal } : p)));
+    try {
+      await supabase.from('pulse_polls').update({ votes: nextVotes, total: nextTotal }).eq('id', pollId);
+    } catch (err) {
+      console.error('Vote error', err);
+    }
   };
 
-  const handleCreatePoll = () => {
+  const handleCreatePoll = async () => {
     const validOptions = pollOptions.filter((option) => option.trim());
-
-    if (!pollQuestion.trim() || validOptions.length < 2) {
-      return;
-    }
-
+    if (!pollQuestion.trim() || validOptions.length < 2) return;
     const newPoll: Poll = {
-      id: `p${Date.now()}`,
+      id: crypto.randomUUID(),
       question: pollQuestion,
       options: validOptions,
       votes: Object.fromEntries(validOptions.map((_, index) => [index, 0])),
       total: 0,
     };
-
     setPolls((previousPolls) => [...previousPolls, newPoll]);
     setPollQuestion('');
     setPollOptions(['', '']);
     setShowPollCreate(false);
+    try {
+      const { error } = await supabase.from('pulse_polls').insert({
+        id: newPoll.id,
+        question: newPoll.question,
+        options: newPoll.options,
+        votes: newPoll.votes,
+        total: newPoll.total,
+      });
+      if (error) throw error;
+    } catch (err) {
+      console.error('Create poll error', err);
+    }
   };
 
   const channelInfo = CHANNELS.find((channel) => channel.id === activeChannel);
@@ -429,7 +473,7 @@ export default function CampusPulsePage() {
         ))}
       </div>
 
-      {activeChannel === 'global' && polls.length > 0 && (
+      {activeChannel === 'global' && pollsLoadedRef.current && polls.length > 0 && (
         <div className="shrink-0 space-y-3">
           {polls.map((poll) => (
             <div

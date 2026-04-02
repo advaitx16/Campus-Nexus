@@ -9,14 +9,13 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { createClient } from '@/lib/client';
+import { dispatchNotificationAction } from '@/lib/notifications';
 
 const FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=1200&q=60';
 
 // ── Dynamic categories and sorts ────────────────────────────────────────────────
 const CATEGORIES = ['All', 'Electronics', 'Books', 'Rentals', 'Services', 'Wanted'];
 const SORTS = ['Newest', 'Price: Low to High', 'Price: High to Low', 'Highest Rated'];
-const LISTINGS_SELECT_WITH_PROFILE = '*, profiles!listings_seller_id_fkey(full_name, student_name, trust_score)';
-
 function getCategoryIcon(cat: string) {
   if (cat === 'Electronics') return Laptop;
   if (cat === 'Books' || cat === 'Textbooks') return BookOpen;
@@ -34,15 +33,60 @@ function PayModal({ listing, onClose }: { listing: any; onClose: () => void }) {
   const pay = async () => {
     setStep('processing');
     try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        alert('Please sign in to make a purchase.');
+        setStep('confirm');
+        return;
+      }
+
+      const platformFee = Math.round(listing.price * 0.02);
+      const sellerId = listing.seller_id || listing.sellerId;
+      const { data: orderRow, error: dbError } = await supabase.from('orders').insert({
+        listing_id: listing.id,
+        buyer_id: user.id,
+        seller_id: sellerId,
+        amount: listing.price,
+        platform_fee: platformFee,
+        order_status: 'PENDING',
+        escrow_status: 'HELD',
+      }).select().single();
+
+      if (dbError) throw new Error(dbError.message);
+      await dispatchNotificationAction('order_interest', { orderId: orderRow.id }).catch(() => {});
+
       const res = await fetch('/api/payment/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: listing.price, productId: listing.id, buyerId: 'demo', sellerId: 'seller' }),
+        body: JSON.stringify({ amount: listing.price, productId: listing.id, buyerId: user.id, sellerId }),
       });
       const data = await res.json();
-      if (data.is_demo) { await new Promise(r => setTimeout(r, 1600)); setStep('done'); return; }
+      if (data.is_demo) {
+        await new Promise(r => setTimeout(r, 1600));
+        await supabase.from('orders').update({ order_status: 'PAID', razorpay_payment_id: data.demo_payment_id }).eq('id', orderRow.id);
+        setStep('done');
+        return;
+      }
       const s = document.createElement('script'); s.src = 'https://checkout.razorpay.com/v1/checkout.js'; document.body.appendChild(s);
-      s.onload = () => new (window as any).Razorpay({ key: data.razorpay_key, amount: data.amount, currency: 'INR', order_id: data.id, name: 'Campus Nexus', description: listing.title, theme: { color: '#4f46e5' }, handler: () => setStep('done'), modal: { ondismiss: () => setStep('confirm') } }).open();
+      s.onload = () => new (window as any).Razorpay({
+        key: data.razorpay_key,
+        amount: data.amount,
+        currency: 'INR',
+        order_id: data.id,
+        name: 'Campus Nexus',
+        description: listing.title,
+        theme: { color: '#4f46e5' },
+        handler: async (response: any) => {
+          await supabase.from('orders').update({
+            order_status: 'PAID',
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+          }).eq('id', orderRow.id);
+          setStep('done');
+        },
+        modal: { ondismiss: () => setStep('confirm') },
+      }).open();
     } catch { setStep('done'); }
   };
 
@@ -202,19 +246,13 @@ export default function DashboardPage() {
   // ── Load listings from Supabase with realtime ──────────────────────────────
   useEffect(() => {
     const load = async () => {
-      const fetchListings = async (selectClause: string) => supabase
+      const fetchListings = async () => supabase
         .from('listings')
-        .select(selectClause)
+        .select('*')
         .eq('admin_status', 'APPROVED')
         .order('created_at', { ascending: false });
 
-      let { data, error } = await fetchListings(LISTINGS_SELECT_WITH_PROFILE);
-
-      if (error) {
-        const fallbackResult = await fetchListings('*');
-        data = fallbackResult.data;
-        error = fallbackResult.error;
-      }
+      const { data, error } = await fetchListings();
 
       if (error) {
         console.error('Supabase listings fetch error:', {
@@ -226,6 +264,20 @@ export default function DashboardPage() {
         setListings([]);
         setDbStatus('offline');
       } else {
+        const sellerIds = Array.from(
+          new Set((data || []).map((listing: any) => listing.seller_id).filter(Boolean))
+        );
+
+        let profileMap = new Map<string, any>();
+        if (sellerIds.length > 0) {
+          const { data: profileRows } = await supabase
+            .from('profiles')
+            .select('id, full_name, student_name, trust_score')
+            .in('id', sellerIds);
+
+          profileMap = new Map((profileRows || []).map((profile: any) => [profile.id, profile]));
+        }
+
         const resolveImageUrl = async (url?: string | null) => {
           if (!url) return FALLBACK_IMAGE;
           if (url.startsWith('data:')) return url;
@@ -235,15 +287,17 @@ export default function DashboardPage() {
         };
 
         const dbListings = await Promise.all(
-          (data || []).map(async (l: any) => ({
-            ...l,
-            image_url: await resolveImageUrl(l.image_url),
+          (data || []).map(async (listing: any) => {
+            const profile = profileMap.get(listing.seller_id);
+            return {
+            ...listing,
+            image_url: await resolveImageUrl(listing.image_url),
             from_db: true,
-            rating: l.rating ?? null,
-            reviews: l.reviews ?? null,
-            seller_name: l.profiles?.student_name || l.profiles?.full_name || l.seller_name || 'Campus Student',
-            trust_score: l.profiles?.trust_score || 85.0,
-          })),
+            rating: listing.rating ?? null,
+            reviews: listing.reviews ?? null,
+            seller_name: profile?.student_name || profile?.full_name || listing.seller_name || 'Campus Student',
+            trust_score: profile?.trust_score || 85.0,
+          }}),
         );
         setListings(dbListings);
         setDbStatus('live');

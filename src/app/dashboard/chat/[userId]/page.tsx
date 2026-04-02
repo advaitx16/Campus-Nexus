@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/lib/client'
 import {
+  buildChatHref,
   buildParticipantFilter,
   getOtherParticipantId,
   getOtherParticipantProfile,
@@ -17,6 +18,7 @@ import {
   type ChatMessageRow,
   type ChatProfile,
 } from '@/lib/chat'
+import { dispatchNotificationAction } from '@/lib/notifications'
 import {
   Send,
   Image as ImageIcon,
@@ -185,12 +187,32 @@ export default function DirectMessagePage() {
           .single()
 
         if (insertError) {
-          setError(insertError.message)
-          setLoading(false)
-          return
+          if ((insertError as any).code === '23505' || insertError.message.toLowerCase().includes('duplicate key')) {
+            const { data: retryRows, error: retryError } = await supabase
+              .from('chats')
+              .select(CHAT_SELECT)
+              .eq('listing_id', listingIdFromUrl)
+              .or(buildParticipantFilter(user.id, userId))
+              .order('created_at', { ascending: false })
+              .limit(1)
+
+            if (retryError) {
+              setError(retryError.message)
+              setLoading(false)
+              return
+            }
+
+            resolvedChat = normalizeChatThreadRow(retryRows?.[0])
+          } else {
+            setError(insertError.message)
+            setLoading(false)
+            return
+          }
         }
 
-        resolvedChat = normalizeChatThreadRow(insertedChat)
+        if (!resolvedChat) {
+          resolvedChat = normalizeChatThreadRow(insertedChat)
+        }
       }
     }
 
@@ -286,10 +308,27 @@ export default function DirectMessagePage() {
           table: 'chat_messages',
           filter: `chat_id=eq.${chatId}`,
         },
-        (payload) => {
+        (payload: any) => {
           setMessages((currentMessages) => {
             return upsertMessage(currentMessages, payload.new as ChatMessageRow)
           })
+        }
+      )
+      .subscribe()
+
+    const profileChannel = supabase
+      .channel(`chat_profile_${userId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
+        async () => {
+          const { data: profileRow } = await supabase
+            .from('profiles')
+            .select('id, full_name, student_name, department, trust_score')
+            .eq('id', userId)
+            .single()
+
+          setThem((profileRow as ChatProfile | null) ?? null)
         }
       )
       .subscribe()
@@ -299,17 +338,17 @@ export default function DirectMessagePage() {
         const state = presenceChannel.presenceState()
         setIsOnline(Boolean(state[userId]))
       })
-      .on('presence', { event: 'join' }, ({ key }) => {
+      .on('presence', { event: 'join' }, ({ key }: any) => {
         if (key === userId) {
           setIsOnline(true)
         }
       })
-      .on('presence', { event: 'leave' }, ({ key }) => {
+      .on('presence', { event: 'leave' }, ({ key }: any) => {
         if (key === userId) {
           setIsOnline(false)
         }
       })
-      .subscribe(async (status) => {
+      .subscribe(async (status: any) => {
         if (status === 'SUBSCRIBED') {
           await presenceChannel.track({
             user_id: me.id,
@@ -321,8 +360,28 @@ export default function DirectMessagePage() {
     return () => {
       void supabase.removeChannel(presenceChannel)
       void supabase.removeChannel(messageChannel)
+      void supabase.removeChannel(profileChannel)
     }
   }, [chatId, me, supabase, userId])
+
+  useEffect(() => {
+    if (!chatId || !me) {
+      return
+    }
+
+    const markThreadNotificationsRead = async () => {
+      const href = buildChatHref(userId, chatId, listing?.id || listingIdFromUrl)
+      await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', me.id)
+        .eq('type', 'message')
+        .eq('link', href)
+        .eq('is_read', false)
+    }
+
+    markThreadNotificationsRead().catch(() => {})
+  }, [chatId, listing?.id, listingIdFromUrl, me, supabase, userId])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -377,6 +436,7 @@ export default function DirectMessagePage() {
       setMessages((currentMessages) => {
         return upsertMessage(currentMessages, insertedMessage as ChatMessageRow)
       })
+      await dispatchNotificationAction('chat_message', { chatId, content }).catch(() => {})
     } catch (sendError) {
       const messageText = sendError instanceof Error ? sendError.message : 'Unable to send message right now.'
       setError(messageText)
@@ -418,7 +478,7 @@ export default function DirectMessagePage() {
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
       {/* Header */}
-      <div className="flex items-center gap-4 p-4 bg-zinc-900 border-b border-zinc-800 shrink-0">
+      <div className="flex items-center gap-3 p-3 md:p-4 bg-zinc-900 border-b border-zinc-800 shrink-0">
         <Link href="/dashboard/chat"><ArrowLeft className="h-5 w-5 text-zinc-500 hover:text-white transition-colors" /></Link>
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="relative shrink-0">
@@ -429,7 +489,7 @@ export default function DirectMessagePage() {
           </div>
           <div className="min-w-0">
             <p className="font-bold text-white truncate">{otherName}</p>
-            <p className="text-xs text-zinc-500 flex items-center gap-2 truncate">
+            <p className="text-xs text-zinc-500 flex flex-wrap items-center gap-2">
               <span className={isOnline ? 'text-emerald-400' : 'text-zinc-600'}>{isOnline ? 'Online in this chat' : 'Offline'}</span>
               <span>· Trust {them?.trust_score || 85}</span>
               {otherDepartment && <span>· {otherDepartment}</span>}

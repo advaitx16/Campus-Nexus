@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { createGeminiClient, generateContentWithFallback, getFlashModelCandidates } from '@/lib/gemini';
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,8 +16,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const genAI = createGeminiClient();
 
     const prompt = `You are a campus community chat moderator for a student marketplace. Analyze this message for:
 1. Hate speech or discrimination
@@ -31,7 +30,7 @@ Channel: ${channel || 'general'}
 
 Respond ONLY with JSON: { "safe": true/false, "reason": "explanation if unsafe, null if safe", "category": "hate|spam|scam|nsfw|bullying|null" }`;
 
-    const result = await model.generateContent(prompt);
+    const result = await generateContentWithFallback(genAI, prompt, getFlashModelCandidates());
     const text = result.response.text();
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {

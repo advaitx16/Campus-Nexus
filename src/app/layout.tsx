@@ -28,7 +28,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    <html lang="en" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+      <head />
       <body suppressHydrationWarning className="min-h-full flex flex-col bg-white dark:bg-[#0F0F10] text-gray-900 dark:text-zinc-100 font-sans antialiased overflow-x-hidden">
         <ThemeProvider>
           {children}

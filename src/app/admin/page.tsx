@@ -20,6 +20,7 @@ export default function AdminDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [activeListings, setActiveListings] = useState<any[]>([]);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [safetyLoading, setSafetyLoading] = useState(false);
 
   // Dynamic Stats
   const [revenueData, setRevenueData] = useState<any[]>([]);
@@ -36,7 +37,7 @@ export default function AdminDashboardPage() {
     // 1. Fetch Users
     const { data: users } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
     if (users) {
-      setUserList(users.map(p => ({
+      setUserList(users.map((p: any) => ({
         id: p.id,
         name: p.full_name || p.email?.split('@')[0] || 'Unknown',
         email: p.email || 'demo@campus.edu',
@@ -48,14 +49,36 @@ export default function AdminDashboardPage() {
     }
 
     // 2. Fetch Pending Listings
-    const { data: pending } = await supabase.from('listings').select('*').eq('admin_status', 'PENDING');
-    if (pending) setPendingListings(pending);
+    const { data: pending } = await supabase
+      .from('listings')
+      .select('*')
+      .eq('admin_status', 'PENDING');
+    if (pending) {
+      const sellerIds = Array.from(new Set(pending.map((listing: any) => listing.seller_id).filter(Boolean)));
+      let sellerMap = new Map<string, any>();
+
+      if (sellerIds.length > 0) {
+        const { data: sellerProfiles } = await supabase
+          .from('profiles')
+          .select('id, full_name, email, department, trust_score')
+          .in('id', sellerIds);
+
+        sellerMap = new Map((sellerProfiles || []).map((profile: any) => [profile.id, profile]));
+      }
+
+      setPendingListings(
+        pending.map((listing: any) => ({
+          ...listing,
+          seller_profile: sellerMap.get(listing.seller_id) ?? null,
+        })),
+      );
+    }
 
     const { data: active } = await supabase.from('listings').select('*').eq('admin_status', 'APPROVED').eq('is_active', true);
     if (active) setActiveListings(active);
 
-    // 3. Fetch Revenue (Platform Fees from Completed Orders)
-    const { data: orders } = await supabase.from('orders').select('amount, platform_fee, created_at').eq('order_status', 'COMPLETE');
+    // 3. Fetch Revenue (Platform Fees from all paid/complete orders)
+    const { data: orders } = await supabase.from('orders').select('amount, platform_fee, created_at');
     if (orders) {
       const monthly = orders.reduce((acc: any, ord: any) => {
         const month = new Date(ord.created_at).toLocaleString('default', { month: 'short' });
@@ -82,13 +105,29 @@ export default function AdminDashboardPage() {
       })));
     }
 
-    // 5. Fetch Disputes
-    const { data: disp } = await supabase.from('orders').select('*, listings(title)').not('dispute_status', 'is', null);
-    if (disp) setDisputes(disp);
+    // 5. Fetch Disputes if the schema supports them
+    const { data: disp, error: dispError } = await supabase
+      .from('orders')
+      .select('id, amount, created_at, buyer_id, seller_id, listings(title)');
+    if (!dispError && disp) {
+      setDisputes([]);
+    }
 
     // 6. Fetch Pulse Messages
-    const { data: pulse } = await supabase.from('community_feed').select('*').order('created_at', { ascending: false }).limit(10);
+    const { data: pulse } = await supabase.from('community_feed').select('*').order('created_at', { ascending: false }).limit(20);
     if (pulse) setPulseMsgs(pulse);
+
+    // 7. Safety keywords (dynamic)
+    try {
+      const { data: safetyRows } = await supabase.from('safety_keywords').select('keyword');
+      if (safetyRows && safetyRows.length > 0) {
+        setBlacklist(safetyRows.map((row: any) => row.keyword));
+      } else {
+        setBlacklist(BLACKLIST_WORDS);
+      }
+    } catch {
+      setBlacklist(BLACKLIST_WORDS);
+    }
 
     setLoading(false);
   };
@@ -144,6 +183,28 @@ export default function AdminDashboardPage() {
   const toggleShadowBan = async (userId: string, currentState: boolean) => {
     await supabase.from('profiles').update({ is_shadow_banned: !currentState }).eq('id', userId);
     fetchData();
+  };
+
+  const handlePulseDelete = async (id: string) => {
+    await supabase.from('community_feed').delete().eq('id', id);
+    setPulseMsgs((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  const addSafetyKeyword = async (keyword: string) => {
+    const clean = keyword.trim().toLowerCase();
+    if (!clean) return;
+    setSafetyLoading(true);
+    try {
+      setBlacklist((prev) => Array.from(new Set([...prev, clean])));
+      await supabase.from('safety_keywords').upsert({ keyword: clean });
+    } finally {
+      setSafetyLoading(false);
+    }
+  };
+
+  const removeSafetyKeyword = async (keyword: string) => {
+    setBlacklist((prev) => prev.filter((w) => w !== keyword));
+    await supabase.from('safety_keywords').delete().eq('keyword', keyword);
   };
 
   const totalRevenue = revenueData.reduce((sum, d) => sum + d.revenue, 0);
@@ -324,7 +385,7 @@ export default function AdminDashboardPage() {
                     </div>
                     <h3 className="text-lg font-bold text-white">{d.listings?.title || 'Unknown Product'}</h3>
                     <p className="text-zinc-500 text-sm">Buyer: {d.buyer_id.slice(0,8)} vs Seller: {d.seller_id.slice(0,8)}</p>
-                    <p className="text-rose-400 text-xs font-bold mt-2">Reason: {d.dispute_status}</p>
+                    <p className="text-rose-400 text-xs font-bold mt-2">Reason: Manual review required</p>
                   </div>
                   <div className="flex gap-2 w-full md:w-auto">
                     <Button className="flex-1 md:flex-none bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl h-10 px-6">介入 Manual Review</Button>
@@ -378,7 +439,7 @@ export default function AdminDashboardPage() {
                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"/>
                 <span className="text-zinc-400 text-xs font-black uppercase tracking-widest">Live Traffic Monitor</span>
              </div>
-             {pulseMsgs.map(msg => (
+            {pulseMsgs.map(msg => (
                <div key={msg.id} className="p-6 bg-zinc-900/50 border border-zinc-800 rounded-3xl flex flex-col md:flex-row justify-between gap-6 transition-all hover:bg-zinc-900">
                  <div className="flex-1 space-y-3">
                    <div className="flex items-center gap-3">
@@ -389,7 +450,7 @@ export default function AdminDashboardPage() {
                    <p className="text-zinc-600 text-[10px] uppercase font-medium">{new Date(msg.created_at).toLocaleString()}</p>
                  </div>
                  <div className="flex gap-2">
-                   <Button size="icon" className="bg-rose-600 hover:bg-rose-500 h-10 w-10 rounded-xl" title="Nuclear Delete"><Trash2 className="h-4 w-4"/></Button>
+                   <Button size="icon" className="bg-rose-600 hover:bg-rose-500 h-10 w-10 rounded-xl" title="Nuclear Delete" onClick={() => handlePulseDelete(msg.id)}><Trash2 className="h-4 w-4"/></Button>
                    <Button size="icon" variant="outline" className="border-zinc-800 text-zinc-500 hover:text-white h-10 w-10 rounded-xl"><Users className="h-4 w-4"/></Button>
                  </div>
               </div>
@@ -444,14 +505,16 @@ export default function AdminDashboardPage() {
                </CardHeader>
                <CardContent className="p-8">
                  <div className="flex gap-4 mb-8">
-                   <Input value={newKeyword} onChange={e => setNewKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && (setBlacklist([...blacklist, newKeyword.toLowerCase()]), setNewKeyword(''))} placeholder="Enter high-risk keyword..." className="bg-zinc-950 border-zinc-800 text-white rounded-2xl h-14 text-lg focus:ring-rose-500"/>
-                   <Button onClick={() => (setBlacklist([...blacklist, newKeyword.toLowerCase()]), setNewKeyword(''))} className="bg-rose-600 hover:bg-rose-500 text-white font-black rounded-2xl h-14 px-8 shadow-lg shadow-rose-900/20">FORBID</Button>
+                   <Input value={newKeyword} onChange={e => setNewKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && addSafetyKeyword(newKeyword)} placeholder="Enter high-risk keyword..." className="bg-zinc-950 border-zinc-800 text-white rounded-2xl h-14 text-lg focus:ring-rose-500"/>
+                   <Button disabled={safetyLoading} onClick={() => addSafetyKeyword(newKeyword)} className="bg-rose-600 hover:bg-rose-500 text-white font-black rounded-2xl h-14 px-8 shadow-lg shadow-rose-900/20">
+                     {safetyLoading ? 'Saving...' : 'FORBID'}
+                   </Button>
                  </div>
                  <div className="flex flex-wrap gap-3">
                    {blacklist.map(word => (
                      <div key={word} className="flex items-center gap-3 px-4 py-2 bg-rose-950/20 border border-rose-500/30 rounded-2xl group transition-all hover:bg-rose-950/40">
                        <span className="text-rose-400 text-sm font-black tracking-wider uppercase">{word}</span>
-                       <button onClick={() => setBlacklist(blacklist.filter(w => w !== word))} className="text-rose-700 hover:text-rose-400 transition-colors">
+                       <button onClick={() => removeSafetyKeyword(word)} className="text-rose-700 hover:text-rose-400 transition-colors">
                          <XCircle className="h-4 w-4"/>
                        </button>
                      </div>

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Camera, Sparkles, Loader2, ArrowLeft, Tag, Upload, CheckCircle2, ToggleLeft, ToggleRight, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -11,6 +11,7 @@ const CATEGORIES  = ['Electronics', 'Textbooks', 'Clothing', 'Sports', 'Services
 export default function CreateListingPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
+  const supabase = createClient();
   const [image, setImage]       = useState<File | null>(null);
   const [preview, setPreview]   = useState<string | null>(null);
   const [isTagging, setIsTagging] = useState(false);
@@ -18,6 +19,8 @@ export default function CreateListingPage() {
   const [saved, setSaved]       = useState(false);
   const [savedTitle, setSavedTitle] = useState('');
   const [error, setError]       = useState('');
+  const [authReady, setAuthReady] = useState(false);
+  const [sessionMissing, setSessionMissing] = useState(false);
   const [form, setForm]         = useState({
     title: '', description: '', price: '', original_price: '',
     category: '', condition: '', tags: '', course_tags: '',
@@ -27,6 +30,37 @@ export default function CreateListingPage() {
   });
 
   const f = (key: string, val: any) => setForm(p => ({ ...p, [key]: val }));
+
+  useEffect(() => {
+    let mounted = true;
+
+    const syncSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!mounted) return;
+      setSessionMissing(!session?.user);
+      setAuthReady(true);
+    };
+
+    syncSession();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+      if (!mounted) return;
+      setSessionMissing(!session?.user);
+      setAuthReady(true);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  useEffect(() => {
+    return () => {
+      if (preview?.startsWith('blob:')) {
+        URL.revokeObjectURL(preview);
+      }
+    };
+  }, [preview]);
 
   const fileToDataUrl = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -46,14 +80,21 @@ export default function CreateListingPage() {
   const handleAITag = async () => {
     if (!image) return;
     setIsTagging(true);
+    setError('');
     try {
-      const bytes = await image.arrayBuffer();
-      const base64 = Buffer.from(bytes).toString('base64');
+      const formData = new FormData();
+      formData.append('image', image);
+
       const res = await fetch('/api/generate-listing', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64, mimeType: image.type }),
+        body: formData,
       });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'AI analysis failed');
+      }
+
       const data = await res.json();
       if (data.title) {
         setForm(p => ({
@@ -62,12 +103,16 @@ export default function CreateListingPage() {
           description: data.description || p.description,
           price:       data.suggested_price?.toString() || p.price,
           category:    data.category    || p.category,
-          condition:   data.condition   || p.condition,
+          condition:   data.condition_rating ? 
+                       (data.condition_rating >= 5 ? 'Excellent' : 
+                        data.condition_rating >= 4 ? 'Like New' : 
+                        data.condition_rating >= 3 ? 'Good' : 'Acceptable') : p.condition,
           tags:        (data.tags || []).join(', '),
         }));
       }
-    } catch {
-      setError('AI tagging failed — please fill in details manually.');
+    } catch (err: any) {
+      console.error('AI Tagging Error:', err);
+      setError('AI tagging failed — ' + (err.message || 'please fill in details manually.'));
     } finally {
       setIsTagging(false);
     }
@@ -76,12 +121,19 @@ export default function CreateListingPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!form.title || !form.price) { setError('Title and price are required.'); return; }
+    if (!form.title || !form.price) {
+      setError('Title and price are required.');
+      return;
+    }
 
     setSaving(true);
     try {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user ?? null;
+
+      if (!user) {
+        throw new Error('Sign in again to list items. Your session expired or is unavailable.');
+      }
 
       // Convert image to data URL and store directly in DB
       let image_url: string | null = null;
@@ -90,46 +142,34 @@ export default function CreateListingPage() {
       }
 
       const payload: any = {
-        title:           form.title.trim(),
-        description:     form.description.trim() || null,
-        price:           parseFloat(form.price),
-        original_price:  form.original_price ? parseFloat(form.original_price) : null,
-        category:        form.category || 'Other',
-        condition:       form.condition || 'Good',
-        tags:            form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-        allows_rental:   form.allows_rental,
-        rental_daily:    form.rental_daily    ? parseFloat(form.rental_daily)    : null,
-        rental_weekly:   form.rental_weekly   ? parseFloat(form.rental_weekly)   : null,
-        rental_semester: form.rental_semester  ? parseFloat(form.rental_semester) : null,
+        seller_id: user.id,
+        seller_email: user.email,
+        seller_name: user.email?.split('@')[0] || 'Student',
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        price: parseFloat(form.price),
+        original_price: form.original_price ? parseFloat(form.original_price) : null,
+        category: form.category || 'Other',
+        condition: form.condition || 'Good',
+        tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+        allows_rental: form.allows_rental,
+        rental_daily: form.rental_daily ? parseFloat(form.rental_daily) : null,
+        rental_weekly: form.rental_weekly ? parseFloat(form.rental_weekly) : null,
+        rental_semester: form.rental_semester ? parseFloat(form.rental_semester) : null,
         security_deposit: form.security_deposit ? parseFloat(form.security_deposit) : null,
         image_url,
         is_active: true,
       };
 
-      if (user) {
-        payload.seller_id    = user.id;
-        payload.seller_email = user.email;
-        payload.seller_name  = user.email?.split('@')[0] || 'Student';
-
-        // Auto-heal missing profiles from older accounts
-        await supabase.from('profiles').upsert(
-          { id: user.id, email: user.email }, 
-          { onConflict: 'id' }
-        );
-      } else {
-        // Demo mode — save with anonymous marker
-        payload.seller_name = 'Demo User';
-      }
+      // Auto-heal missing profiles from older accounts
+      await supabase.from('profiles').upsert(
+        { id: user.id, email: user.email },
+        { onConflict: 'id' }
+      );
 
       const { error: insertErr } = await supabase.from('listings').insert(payload);
-
       if (insertErr) {
-        // If table doesn't exist or RLS blocks — still show success in demo mode
-        if (!user) {
-          console.warn('Demo mode: listing not saved to DB.', insertErr.message);
-        } else {
-          throw new Error(insertErr.message);
-        }
+        throw new Error(insertErr.message);
       }
 
       setSavedTitle(form.title);
@@ -140,7 +180,6 @@ export default function CreateListingPage() {
       setSaving(false);
     }
   };
-
   // ── Success Screen ────────────────────────────────────────────────────────
   if (saved) {
     return (
@@ -175,6 +214,26 @@ export default function CreateListingPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
+        {!authReady ? (
+          <div className="flex items-start gap-2.5 p-3 bg-gray-100 dark:bg-zinc-900/60 border border-gray-200 dark:border-white/[0.08] rounded-xl">
+            <Loader2 className="h-4 w-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5 animate-spin"/>
+            <p className="text-xs text-gray-600 dark:text-zinc-300">Checking your session before publishing...</p>
+          </div>
+        ) : sessionMissing ? (
+          <div className="flex items-start gap-2.5 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-500/20 rounded-xl">
+            <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5"/>
+            <div className="space-y-2">
+              <p className="text-xs text-amber-700 dark:text-amber-300">Your login session is missing, so this page cannot publish a real listing yet.</p>
+              <button
+                type="button"
+                onClick={() => router.push('/login')}
+                className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+              >
+                Sign in again
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {/* Photo Upload */}
         <div className="bg-white dark:bg-[#1C1C1E] border border-gray-200 dark:border-white/[0.07] rounded-xl p-5 space-y-3">
@@ -295,7 +354,7 @@ export default function CreateListingPage() {
         )}
 
         {/* Submit */}
-        <button type="submit" disabled={saving}
+        <button type="submit" disabled={saving || !authReady || sessionMissing}
           className="w-full h-12 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold rounded-xl text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20">
           {saving ? <><Loader2 className="h-4 w-4 animate-spin"/> Submitting...</> : 'Submit for Admin Review'}
         </button>
@@ -304,3 +363,4 @@ export default function CreateListingPage() {
     </div>
   );
 }
+

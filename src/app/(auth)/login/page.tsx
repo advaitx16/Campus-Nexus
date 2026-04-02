@@ -18,17 +18,48 @@ export default function LoginPage() {
 
   const reset = () => { setError(''); setSuccess(''); };
 
+  const isEmailRateLimitError = (message?: string | null) => {
+    return (message || '').toLowerCase().includes('email rate limit exceeded');
+  };
+
+  const handleRateLimitedSignup = async (sb: ReturnType<typeof createClient>) => {
+    const loginAttempt = await sb.auth.signInWithPassword({ email, password });
+
+    if (!loginAttempt.error) {
+      setSuccess('This account already exists, so we signed you in directly.');
+      router.push('/dashboard');
+      router.refresh();
+      return true;
+    }
+
+    setMode('login');
+    setError('Too many email requests were sent. If this account is already registered, sign in now. Otherwise wait a minute and try again.');
+    return true;
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); reset(); setLoading(true);
     const sb = createClient();
     try {
       if (mode === 'magic') {
         const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: `${location.origin}/auth/callback` } });
-        if (error) throw error;
+        if (error) {
+          if (isEmailRateLimitError(error.message)) {
+            setError('Too many magic links were requested. Please wait a minute before trying again.');
+            return;
+          }
+          throw error;
+        }
         setSuccess('Magic link sent. Check your inbox.');
       } else if (mode === 'signup') {
         const { error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: `${location.origin}/auth/callback` } });
-        if (error) throw error;
+        if (error) {
+          if (isEmailRateLimitError(error.message)) {
+            await handleRateLimitedSignup(sb);
+            return;
+          }
+          throw error;
+        }
         setSuccess('Account created. Check your email to confirm.');
       } else {
         const { error } = await sb.auth.signInWithPassword({ email, password });

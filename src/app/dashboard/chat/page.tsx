@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/lib/client'
 import {
+  buildChatHref,
   buildLastMessageMap,
   getOtherParticipantId,
   getOtherParticipantProfile,
@@ -12,6 +13,7 @@ import {
   normalizeChatThreadRow,
   type ChatProfile,
   type ChatMessageRow,
+  type ChatThreadRow,
 } from '@/lib/chat'
 import { MessageSquare, ShieldCheck, Loader2, ArrowRight, AlertCircle } from 'lucide-react'
 
@@ -34,6 +36,7 @@ type InboxThread = {
   listingTitle: string
   lastMessagePreview: string
   lastMessageAt: string
+  unreadCount: number
 }
 
 export default function MessagesInboxPage() {
@@ -75,7 +78,9 @@ export default function MessagesInboxPage() {
       return
     }
 
-    const chats = (chatRows ?? []).map((chatRow) => normalizeChatThreadRow(chatRow)).filter((chat) => chat !== null)
+    const chats: ChatThreadRow[] = (chatRows ?? [])
+      .map((chatRow: any): ChatThreadRow | null => normalizeChatThreadRow(chatRow))
+      .filter((chat: ChatThreadRow | null): chat is ChatThreadRow => chat !== null)
     const chatIds = chats.map((chat) => chat.id)
     let lastMessageByChatId = new Map<string, ChatMessageRow>()
 
@@ -120,6 +125,20 @@ export default function MessagesInboxPage() {
       }
     }
 
+    const { data: unreadMessageNotifications } = await supabase
+      .from('notifications')
+      .select('id, link')
+      .eq('user_id', user.id)
+      .eq('type', 'message')
+      .eq('is_read', false)
+
+    const unreadCountByLink = new Map<string, number>()
+    for (const notification of unreadMessageNotifications ?? []) {
+      const link = (notification as any)?.link
+      if (!link) continue
+      unreadCountByLink.set(link, (unreadCountByLink.get(link) || 0) + 1)
+    }
+
     const nextThreads = chats
       .map((chat) => {
         const otherId = getOtherParticipantId(chat, user.id)
@@ -132,6 +151,7 @@ export default function MessagesInboxPage() {
           getOtherParticipantProfile(chat, user.id) ??
           (otherId ? fallbackProfiles.get(otherId) ?? null : null)
         const lastMessage = lastMessageByChatId.get(chat.id)
+        const href = buildChatHref(otherId, chat.id, chat.listing_id)
 
         return {
           id: chat.id,
@@ -141,6 +161,7 @@ export default function MessagesInboxPage() {
           listingTitle: chat.listing?.title?.trim() || 'Direct conversation',
           lastMessagePreview: lastMessage?.content?.trim() || 'Start the conversation',
           lastMessageAt: lastMessage?.created_at || chat.created_at,
+          unreadCount: unreadCountByLink.get(href) || 0,
         }
       })
       .filter((thread): thread is InboxThread => thread !== null)
@@ -254,6 +275,11 @@ export default function MessagesInboxPage() {
                     <div className="flex items-center gap-2">
                       <p className="font-black text-gray-900 dark:text-white truncate">{thread.otherName}</p>
                       <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      {thread.unreadCount > 0 && (
+                        <span className="min-w-5 h-5 px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                          {thread.unreadCount > 9 ? '9+' : thread.unreadCount}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400 truncate">
                       @{thread.listingTitle}

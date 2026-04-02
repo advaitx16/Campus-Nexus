@@ -46,6 +46,16 @@ export function buildParticipantFilter(firstUserId: string, secondUserId: string
   return `and(buyer_id.eq.${firstUserId},seller_id.eq.${secondUserId}),and(buyer_id.eq.${secondUserId},seller_id.eq.${firstUserId})`
 }
 
+export function buildChatHref(otherUserId: string, chatId: string, listingId?: string | null) {
+  const params = new URLSearchParams({ chat: chatId })
+
+  if (listingId) {
+    params.set('listing', listingId)
+  }
+
+  return `/dashboard/chat/${otherUserId}?${params.toString()}`
+}
+
 export function getOtherParticipantId(chat: ChatThreadRow, currentUserId: string) {
   return chat.buyer_id === currentUserId ? chat.seller_id : chat.buyer_id
 }

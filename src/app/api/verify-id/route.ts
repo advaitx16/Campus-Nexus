@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { createGeminiClient, generateContentWithFallback, getVisionModelCandidates } from '@/lib/gemini';
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,8 +13,7 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'Gemini API key not configured' }, { status: 500 });
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const genAI = createGeminiClient();
 
     const prompt = `You are a student ID card scanner for a university marketplace. Analyze this ID card image and extract:
 1. Student name
@@ -26,10 +25,14 @@ export async function POST(request: NextRequest) {
 Respond ONLY with a JSON object: { "name": "...", "roll_number": "...", "department": "...", "year": "...", "institution": "...", "verified": true/false }
 If this is NOT a valid student ID card, set "verified": false and other fields to null.`;
 
-    const result = await model.generateContent([
-      prompt,
-      { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
-    ]);
+    const result = await generateContentWithFallback(
+      genAI,
+      [
+        prompt,
+        { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+      ],
+      getVisionModelCandidates(),
+    );
 
     const text = result.response.text();
     const jsonMatch = text.match(/\{[\s\S]*\}/);

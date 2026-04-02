@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/client';
 import { Button } from '@/components/ui/button';
+import { dispatchNotificationAction } from '@/lib/notifications';
 
 declare global { interface Window { Razorpay: any } }
 
@@ -36,6 +37,7 @@ function PaymentModal({ isOpen, onClose, listing, amount, mode, tier }: any) {
       }).select().single();
 
       if (dbError) throw new Error(dbError.message);
+      await dispatchNotificationAction('order_interest', { orderId: orderRow.id }).catch(() => {});
 
       const res = await fetch('/api/payment/create-order', {
         method: 'POST',
@@ -227,23 +229,17 @@ export default function ProductDetailPage() {
         return { data: result.data, error: result.error };
       };
 
-      let { data, error } = await fetchListingRecord('*, profiles!listings_seller_id_fkey(*)');
-      let profile = data?.profiles ?? null;
+      const { data, error } = await fetchListingRecord('*');
+      let profile = null;
 
-      if (error) {
-        const fallbackResult = await fetchListingRecord('*');
-        data = fallbackResult.data;
-        error = fallbackResult.error;
+      if (data?.seller_id) {
+        const { data: fallbackProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', data.seller_id)
+          .maybeSingle();
 
-        if (data?.seller_id) {
-          const { data: fallbackProfile } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', data.seller_id)
-            .maybeSingle();
-
-          profile = fallbackProfile ?? null;
-        }
+        profile = fallbackProfile ?? null;
       }
 
       if (data) {
@@ -301,7 +297,8 @@ export default function ProductDetailPage() {
     if (!error && profile) {
       await supabase.from('profiles').update({ cc_points: (profile.cc_points || 0) - 20 }).eq('id', user.id);
       setListing((prev: any) => ({ ...prev, isFeatured: true, isBumped: true }));
-      alert('🚀 Ad Boosted! Your listing will now appear at the top of the marketplace.');
+      await dispatchNotificationAction('boost_listing', { listingId: id }).catch(() => {});
+      alert('Your listing is boosted and all active users were notified.');
     }
   };
 

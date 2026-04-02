@@ -27,7 +27,7 @@ export default function LeaderboardPage() {
   const fetchLeaders = async () => {
     const { data } = await supabase.from('profiles').select('*').order('trust_score', { ascending: false }).limit(20);
     if (data) {
-      setTopSellers(data.map((p, idx) => ({
+      setTopSellers(data.map((p: any, idx: number) => ({
         rank: idx + 1,
         id: p.id,
         alias: p.full_name || p.email?.split('@')[0] || 'Unknown User',

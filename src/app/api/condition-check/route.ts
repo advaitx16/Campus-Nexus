@@ -1,5 +1,5 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
+import { createGeminiClient, generateContentWithFallback, getVisionModelCandidates } from '@/lib/gemini';
 
 export async function POST(req: Request) {
   try {
@@ -11,8 +11,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Both handover and return images are required' }, { status: 400 });
     }
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' }); // Pro is better for complex vision comparisons
+    const genAI = createGeminiClient();
 
     // Convert both images to buffer then base64
     const hoBuffer = Buffer.from(await handoverImage.arrayBuffer());
@@ -35,7 +34,7 @@ You MUST output exactly a JSON object, no markdown, no other words. Keys:
       { inlineData: { data: retBuffer.toString('base64'), mimeType: returnImage.type } }
     ];
 
-    const result = await model.generateContent([prompt, ...imageParts]);
+    const result = await generateContentWithFallback(genAI, [prompt, ...imageParts], getVisionModelCandidates());
     const responseText = result.response.text();
 
     console.log("Raw Damage Check AI Response:", responseText);
